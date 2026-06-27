@@ -1,0 +1,10 @@
+pandas
+openpyxl
+scikit-learn
+numpy
+scipy
+matplotlib
+
+# опционально — BERT-модели (раздел 7.5 ноутбука)
+# transformers
+# torch
