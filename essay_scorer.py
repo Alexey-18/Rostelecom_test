@@ -156,7 +156,6 @@ for q_col, s_col, q_name in questions:
     models_final[q_col] = (ridge_f, gbm_f)
     tfidf_store[q_col] = (char_v_f, word_v_f)
     all_oof += oof
-
     print(f"{q_name} MAE: {mean_absolute_error(y, oof):.3f}, QWK: {qwk(y, oof, 3):.3f}")
 
 total_true = train["total"].fillna(0).values
