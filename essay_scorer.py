@@ -13,7 +13,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, cohen_kappa
 
 warnings.filterwarnings("ignore")
 
-output = "val_predictions.xlsx"
 threshold = 6
 fold_out = 5
 fold_in = 3
@@ -53,9 +52,9 @@ def text_features(texts: pd.Series, is_missing_flags: pd.Series) -> np.ndarray:
     for t, missing in zip(texts, is_missing_flags):
         words = re.findall(r"[а-яёa-z]+", t.lower())
         sents = [s for s in re.split(r"[.!?]+", t) if s.strip()]
-        n_w   = len(words)
-        n_u   = len(set(words))
-        n_s   = max(len(sents), 1)
+        n_w = len(words)
+        n_u = len(set(words))
+        n_s = max(len(sents), 1)
         feats.append([
             len(t),
             n_w,
@@ -106,15 +105,11 @@ for q_col, s_col, q_name in questions:
     miss_flags = train[f"is_missing_{q_col}"]
     texts = train[q_col]
     oof = np.zeros(len(y))
-
+    best_alphas_list = []
     for fold, (tr_i, val_i) in enumerate(fold_outf.split(texts)):
         char_v_fold, word_v_fold = build_tfidf(texts.iloc[tr_i])
-        X_tr = encode(
-            texts.iloc[tr_i], miss_flags.iloc[tr_i], char_v_fold, word_v_fold
-        )
-        X_val = encode(
-            texts.iloc[val_i], miss_flags.iloc[val_i], char_v_fold, word_v_fold
-        )
+        X_tr = encode(texts.iloc[tr_i], miss_flags.iloc[tr_i], char_v_fold, word_v_fold)
+        X_val = encode(texts.iloc[val_i], miss_flags.iloc[val_i], char_v_fold, word_v_fold)
         y_tr, y_val = y[tr_i], y[val_i]
 
         fold_inf = KFold(n_splits=fold_in, shuffle=True, random_state=fold)
@@ -129,8 +124,10 @@ for q_col, s_col, q_name in questions:
             if np.mean(inner_maes) < best_mae_inner:
                 best_mae_inner = np.mean(inner_maes)
                 best_alpha = alpha
-
-        ridge = Ridge(alpha=best_alpha)
+            best_alphas_list.append(best_alpha)
+            ridge = Ridge(alpha=best_alpha)
+        final_alpha = np.mean(best_alphas_list)
+        ridge_f = Ridge(alpha=final_alpha)
         gbm = GradientBoostingRegressor(
             n_estimators=100,
             learning_rate=0.1,
@@ -140,11 +137,7 @@ for q_col, s_col, q_name in questions:
         )
         ridge.fit(X_tr, y_tr)
         gbm.fit(X_tr, y_tr)
-        preds = np.clip(
-            enseble[0] * ridge.predict(X_val) + enseble[1] * gbm.predict(X_val),
-            0,
-            3,
-        )
+        preds = np.clip(enseble[0] * ridge.predict(X_val) + enseble[1] * gbm.predict(X_val),0,3,)
         oof[val_i] = preds
 
     char_v_f, word_v_f = build_tfidf(texts)
@@ -164,9 +157,7 @@ for q_col, s_col, q_name in questions:
     tfidf_store[q_col] = (char_v_f, word_v_f)
     all_oof += oof
 
-    print(
-        f"{q_name} MAE: {mean_absolute_error(y, oof):.3f}, QWK: {qwk(y, oof, 3):.3f}"
-    )
+    print(f"{q_name} MAE: {mean_absolute_error(y, oof):.3f}, QWK: {qwk(y, oof, 3):.3f}")
 
 total_true = train["total"].fillna(0).values
 pt = (total_true >= threshold).astype(int)
@@ -179,27 +170,6 @@ print(
     f"Acc: {accuracy_score(pt, pp):.3f}, "
     f"F1: {f1_score(pt, pp, zero_division=0):.3f}"
 )
-
-val_preds = {}
-for q_col, s_col, _ in questions:
-    char_v, word_v = tfidf_store[q_col]
-    miss_flags_v = val[f"is_missing_{q_col}"]
-    X_v = encode(val[q_col], miss_flags_v, char_v, word_v)
-    ridge_f, gbm_f = models_final[q_col]
-    val_preds[s_col] = np.clip(enseble[0] * ridge_f.predict(X_v) + enseble[1] * gbm_f.predict(X_v), 0, 3)
-
-predictions = pd.DataFrame({
-    "id": val["id"],
-    "pred_score1": np.round(val_preds["score1"], 2),
-    "pred_score2": np.round(val_preds["score2"], 2),
-    "pred_score3": np.round(val_preds["score3"], 2),
-})
-predictions["pred_total"] = (
-    predictions["pred_score1"] +
-    predictions["pred_score2"] +
-    predictions["pred_score3"]
-).round(2)
-predictions["pass"] = (predictions["pred_total"] >= threshold).astype(int)
 
 model_bert = "cointegrated/rubert-tiny2" # или используем "DeepPavlov/rubert-base-cased"
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -225,11 +195,11 @@ def get_bert_embeddings(texts: list, model_name: str, device, batch_size: int = 
         all_embeddings.append(output.last_hidden_state[:, 0, :].cpu().numpy())
     return np.vstack(all_embeddings)
 
-def encode_all_questions_bert(df: pd.DataFrame, model_name: str, device) -> np.ndarray:
-    parts = []
+def encode_all_questions_bert(df: pd.DataFrame, model_name: str, device) -> dict:
+    q_embeddings = {}
     for q_col in ["q1", "q2", "q3"]:
-        parts.append(get_bert_embeddings(df[q_col].tolist(), model_name, device))
-    return np.hstack(parts)
+        q_embeddings[q_col] = get_bert_embeddings(df[q_col].tolist(), model_name, device)
+    return q_embeddings
 
 X_bert_train = encode_all_questions_bert(train, model_bert, device)
 X_bert_val = encode_all_questions_bert(val, model_bert, device)
@@ -241,7 +211,8 @@ model_berts = {}
 for q_col, s_col, q_name in questions:
     y = train[s_col].fillna(0).values
     oof = np.zeros(len(y))
-    for fold, (tr_i, val_i) in enumerate(kf_bert.split(X_bert_train)):
+    best_alphas_list = []
+    for fold, (tr_i, val_i) in enumerate(kf_bert.split(X_bert_train[q_col])):
         fold_inf = KFold(n_splits=3, shuffle=True, random_state=fold)
         best_alpha, best_mae_in = 1.0, 999.0
         for alpha in ridge_alpha:
@@ -253,24 +224,23 @@ for q_col, s_col, q_name in questions:
                 inner_maes.append(mean_absolute_error(y[tr_i][vi], p))
             if np.mean(inner_maes) < best_mae_in:
                 best_mae_in, best_alpha = np.mean(inner_maes), alpha
+        best_alphas_list.append(best_alpha)
         r = Ridge(alpha=best_alpha)
         r.fit(X_bert_train[tr_i], y[tr_i])
         oof[val_i] = np.clip(r.predict(X_bert_train[val_i]), 0, 3)
-
-    final_r = Ridge(alpha=1.0)
+    final_alpha = np.mean(best_alphas_list)
+    final_r = Ridge(alpha=final_alpha)
     final_r.fit(X_bert_train, y)
     model_berts[q_col] = final_r
     bert_oof_total += oof
-    print(
-        f"{q_name} - MAE: {mean_absolute_error(y, oof):.3f}  QWK: {qwk(y, oof, 3):.3f}"
-    )
+    print(f"{q_name} - MAE: {mean_absolute_error(y, oof):.3f}  QWK: {qwk(y, oof, 3):.3f}")
 
 total_true = train["total"].fillna(0).values
 print(f"MAE: {mean_absolute_error(total_true, bert_oof_total):.3f}  QWK: {qwk(total_true, bert_oof_total, 9):.3f}")
 
 bert_val_preds = {}
 for q_col, s_col, _ in questions:
-    bert_val_preds[s_col] = np.clip(model_berts[q_col].predict(X_bert_val), 0, 3)
+    bert_val_preds[s_col] = np.clip(model_berts[q_col].predict(X_bert_val[q_col]), 0, 3)
 
 predictions = pd.DataFrame(
     {
@@ -280,13 +250,7 @@ predictions = pd.DataFrame(
         "pred_score3": np.round(bert_val_preds["score3"], 2),
     }
 )
-predictions["pred_total"] = (
-    predictions["pred_score1"]
-    + predictions["pred_score2"]
-    + predictions["pred_score3"]
-).round(2)
+predictions["pred_total"] = (predictions["pred_score1"]+ predictions["pred_score2"]+ predictions["pred_score3"]).round(2)
 predictions["pass"] = (predictions["pred_total"] >= threshold).astype(int)
-
-output = f"predictions_{model_bert.split('/')[-1]}.xlsx"
-predictions.to_excel(output, index=False)
-print(f"\nПрошло порог (>= {threshold}): {predictions['pass'].mean():.1%} ({predictions['pass'].sum()} из {len(predictions)})")
+predictions.to_excel("val_predictions.xlsx", index=False)
+print(f"Прошло порог (>= {threshold}): {predictions['pass'].mean():.1%} ({predictions['pass'].sum()} из {len(predictions)})")
