@@ -14,13 +14,13 @@
 
 ## Структура репозитория
 
-* essay_scorer.ipynb — ноутбук с анализом данных, экспериментами и графиками.
+* essay_scorer_rost.ipynb — ноутбук с анализом данных, экспериментами и графиками.
 * essay_scorer.py — чистый скрипт для запуска обучения и инференса.
 * val_predictions.xlsx — готовый файл с предсказаниями для валидационной выборки.
 * requirements.txt — список необходимых библиотек.
 
 ## Запуск проекта
 
-pip install -r requirements.txt
-python essay_scorer.py
+* pip install -r requirements.txt
+* python essay_scorer.py
 
